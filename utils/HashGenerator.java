@@ -28,4 +28,7 @@ public class HashGenerator {
 		}
 
 }
+	public static boolean verificarHash(String claveIngresada,String hashAlmecenado) {
+		return generarHash(claveIngresada).equals(hashAlmecenado);
+	}
 }
