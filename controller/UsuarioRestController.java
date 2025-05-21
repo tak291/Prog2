@@ -1,6 +1,8 @@
 package co.edu.unbosque.controller;
 
+import co.edu.unbosque.entity.Parametro;
 import co.edu.unbosque.entity.Usuario;
+import co.edu.unbosque.service.api.ParametroServiceAPI;
 import co.edu.unbosque.service.api.UsuarioServiceAPI;
 import co.edu.unbosque.utils.HashGenerator;
 import co.edu.unbosque.utils.ResourceNotFoundException;
@@ -19,6 +21,8 @@ public class UsuarioRestController {
 
 	@Autowired
 	private UsuarioServiceAPI usuarioServiceAPI;
+	@Autowired
+	private ParametroServiceAPI parametroServiceAPI;
 
 	@GetMapping(value = "/getAll")
 	// ResponseEntity List<Usuario> getAll(){
@@ -55,16 +59,53 @@ public class UsuarioRestController {
 
 	private void procesarClave(Usuario usuario) {
 		if (usuario.getClaveUsrio() != null && !usuario.getClaveUsrio().isEmpty()) {
-	        Usuario usuarioExistente = usuarioServiceAPI.get(usuario.getId()); // Buscar por ID real
+	        Usuario usuarioExistente = (usuario.getId() != 0) ? usuarioServiceAPI.get(usuario.getId()) : null;
 
 	        if (usuarioExistente == null || !usuario.getClaveUsrio().equals(usuarioExistente.getClaveUsrio())) {
 	            usuario.setClaveUsrio(HashGenerator.generarHash(usuario.getClaveUsrio()));
-	            usuario.setFchaUltmaClave(usuario.getFchaUltmaClave() != null ? usuario.getFchaUltmaClave() : new Date());
+	            usuario.setFchaUltmaClave(new Date()); // Actualiza con la fecha actual
 	        } else {
-	            usuario.setClaveUsrio(usuarioExistente.getClaveUsrio()); // Mantener la contraseña anterior
+	            usuario.setClaveUsrio(usuarioExistente.getClaveUsrio());
 	        }
 	    }
 	}
+	@GetMapping(value="/login/{correo}/{clave}")
+	public String login(@PathVariable String correo,@PathVariable String clave) {
+		List<Usuario> usuarios=usuarioServiceAPI.getAll();
+		Usuario usuario=usuarios.stream().filter(u->u.getCorreoUsuario().equals(correo)).findFirst().orElse(null);
+		if(usuario==null) {
+			return "usuario no encontrado";
+		}
+		if(usuario.getIdTipoUsuario().equals("1")){
+			return"Inicio de sesion Exitoso";
+			
+		}
+		if(usuario.getEstado()==0) {
+			return "Cuenta Bloqueada";
+		}
+		if(!HashGenerator.verificarHash(clave, usuario.getClaveUsrio())) {
+			usuario.setIntentos(usuario.getIntentos()+1);
+			usuarioServiceAPI.save(usuario);
+			
+			short idParametro=(short)1;
+			Parametro parametro=parametroServiceAPI.get(idParametro);
+			int intentosMaximos=parametro.getValorNumero();
+			
+			if(usuario.getIntentos()>=intentosMaximos) {
+				usuario.setEstado((byte)0);
+				usuarioServiceAPI.save(usuario);
+				return "Cuenta bloqueada por intentos maximos";
+			}
+			usuarioServiceAPI.save(usuario);
+			return "Credenciales Incorrectas.Intento"+usuario.getIntentos();
+		}
+		usuario.setIntentos(0);
+		usuarioServiceAPI.save(usuario);
+		return" inicio de sesion Exitoso";
+		
+		
+	}
+	
 	
 
 }
