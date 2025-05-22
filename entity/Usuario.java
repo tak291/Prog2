@@ -7,6 +7,8 @@ import java.util.Date;
 
 
 
+
+
 /**
  * The persistent class for the usuario database table.
  * 
@@ -29,7 +31,8 @@ public class Usuario implements Serializable {
     
 	@Column(name="estado")
 	private byte estado;
-    
+	
+	
 	@Temporal(TemporalType.TIMESTAMP)
 	@Column(name="fcha_ultma_clave")
 	private Date fchaUltmaClave;
