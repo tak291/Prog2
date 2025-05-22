@@ -1,6 +1,9 @@
 package co.edu.unbosque.controller;
 
+import co.edu.unbosque.entity.Parametro;
 import co.edu.unbosque.entity.Usuario;
+import co.edu.unbosque.service.api.EmailServiceAPI;
+import co.edu.unbosque.service.api.ParametroServiceAPI;
 import co.edu.unbosque.service.api.UsuarioServiceAPI;
 import co.edu.unbosque.utils.HashGenerator;
 import co.edu.unbosque.utils.ResourceNotFoundException;
@@ -19,6 +22,10 @@ public class UsuarioRestController {
 
 	@Autowired
 	private UsuarioServiceAPI usuarioServiceAPI;
+	@Autowired
+	private ParametroServiceAPI parametroServiceAPI;
+	@Autowired
+	private EmailServiceAPI emailServiceAPI;
 
 	@GetMapping(value = "/getAll")
 	// ResponseEntity List<Usuario> getAll(){
@@ -28,9 +35,20 @@ public class UsuarioRestController {
 
 	@PostMapping(value = "/saveUsuario")
 	public ResponseEntity<Usuario> save(@RequestBody Usuario usuario) {
-		procesarClave(usuario);
-		Usuario obj = usuarioServiceAPI.save(usuario);
-		return new ResponseEntity<Usuario>(obj, HttpStatus.OK); // 200
+		boolean esnuevoUsuario=(usuario.getId()==0);
+		if(esnuevoUsuario) {
+			String claveGenerada= generarClaveAleatoria();
+			usuario.setClaveUsrio(HashGenerator.generarHash(claveGenerada));
+			Usuario obj=usuarioServiceAPI.save(usuario);
+			enviarCredenciales(obj, claveGenerada);
+			return ResponseEntity.ok().body(usuario);
+		}else {
+			procesarClave(usuario);
+			Usuario obj = usuarioServiceAPI.save(usuario);
+			return new ResponseEntity<Usuario>(obj, HttpStatus.OK); // 200
+			
+		}
+		
 	}
 
 	@GetMapping(value = "/findRecord/{id}")
@@ -53,18 +71,95 @@ public class UsuarioRestController {
 		return new ResponseEntity<Usuario>(usuario, HttpStatus.OK);
 	}
 
-	private void procesarClave(Usuario usuario) {
+	public void procesarClave(Usuario usuario) {
 		if (usuario.getClaveUsrio() != null && !usuario.getClaveUsrio().isEmpty()) {
-	        Usuario usuarioExistente = usuarioServiceAPI.get(usuario.getId()); // Buscar por ID real
+	        Usuario usuarioExistente = (usuario.getId() != 0) ? usuarioServiceAPI.get(usuario.getId()) : null;
 
-	        if (usuarioExistente == null || !usuario.getClaveUsrio().equals(usuarioExistente.getClaveUsrio())) {
+	        if (usuarioExistente == null || !HashGenerator.verificarHash(usuario.getClaveUsrio(), usuarioExistente.getClaveUsrio())) {
 	            usuario.setClaveUsrio(HashGenerator.generarHash(usuario.getClaveUsrio()));
-	            usuario.setFchaUltmaClave(usuario.getFchaUltmaClave() != null ? usuario.getFchaUltmaClave() : new Date());
+	            usuario.setFchaUltmaClave(new Date()); 
 	        } else {
-	            usuario.setClaveUsrio(usuarioExistente.getClaveUsrio()); // Mantener la contraseña anterior
+	            usuario.setClaveUsrio(usuarioExistente.getClaveUsrio());
 	        }
 	    }
 	}
+	@GetMapping(value="/login/{correo}/{clave}")
+	public String login(@PathVariable String correo,@PathVariable String clave) {
+		List<Usuario> usuarios=usuarioServiceAPI.getAll();
+		Usuario usuario=usuarios.stream().filter(u->u.getCorreoUsuario().equals(correo)).findFirst().orElse(null);
+		if(usuario==null) {
+			return "usuario no encontrado";
+		}
+		if(usuario.getIdTipoUsuario().equals("1")){
+			return"Inicio de sesion Exitoso";
+			
+		}
+		if(usuario.getEstado()==0) {
+			return "Cuenta Bloqueada";
+		}
+		if(!HashGenerator.verificarHash(clave, usuario.getClaveUsrio())) {
+			usuario.setIntentos(usuario.getIntentos()+1);
+			usuarioServiceAPI.save(usuario);
+			
+			short idParametro=(short)1;
+			Parametro parametro=parametroServiceAPI.get(idParametro);
+			int intentosMaximos=parametro.getValorNumero();
+			
+			if(usuario.getIntentos()>=intentosMaximos) {
+				usuario.setEstado((byte)0);
+				usuarioServiceAPI.save(usuario);
+				return "Cuenta bloqueada por intentos maximos";
+			}
+			usuarioServiceAPI.save(usuario);
+			return "Credenciales Incorrectas.Intento"+usuario.getIntentos();
+		}
+		Date fechaActual= new Date();
+		short idCambioClave=(short)2;
+		Parametro parametroCambioClave=parametroServiceAPI.get(idCambioClave);
+		if(parametroCambioClave==null) {
+			return"Error,no se ha configurado la periocidad del cambio de contraseña";
+		}
+		Date fechaInicial=parametroCambioClave.getFechaInicial();
+		Date fechaFinal=parametroCambioClave.getFechaFinal();
+		
+		if (fechaActual.before(fechaInicial)) {
+		    return "El parámetro de cambio de contraseña aún no está activo.";
+		}
+
+		if (fechaFinal != null && fechaActual.after(fechaFinal)) {
+		    return "El período de cambio de contraseña ha expirado.";
+		}
+		
+		int diasPermitidos=parametroCambioClave.getValorNumero();
+		
+		long diferenciaTiempo=fechaActual.getTime()-usuario.getFchaUltmaClave().getTime();
+		long diferenciasDias=diferenciaTiempo/(1000*60*60*24);
+		
+		if(diferenciasDias>=diasPermitidos) {
+			usuario.setEstado((byte)0);
+			usuarioServiceAPI.save(usuario);
+			return"Cuenta bloqueada , no actualizo  su contraseña";
+		}
+		long diasRestantes=diasPermitidos-diferenciasDias;
+		usuario.setIntentos(0);
+		usuarioServiceAPI.save(usuario);
+		return" inicio de sesion Exitoso. Recuerda que debes cambiar tu contraseña dentro de"+diasRestantes;
+		
+		
+	}
+	public String  generarClaveAleatoria() {
+		return Long.toHexString(Double.doubleToLongBits(Math.random())).substring(0,8);
+	}
+	
+	public void enviarCredenciales(Usuario usuario,String claveGenerada) {
+		String asunto = "Bienvenido a la plataforma";
+	    String mensaje = "Hola " + usuario.getLoginUsrio() + ",\n\nTus credenciales de acceso:\n"
+	                    + "Correo: " + usuario.getCorreoUsuario() + "\n"
+	                    + "Contraseña: " + claveGenerada+ "\n\nRecuerda cambiar tu contraseña después del primer inicio de sesión.";
+	    emailServiceAPI.EnviarCorreo(usuario.getCorreoUsuario(), asunto, mensaje);
+		
+	}
+	
 	
 
 }
